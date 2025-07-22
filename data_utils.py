@@ -128,9 +128,9 @@ class CustomDataset:
         )
         return {k: round(v, 4) for k, v in result.items()}
 
-    def compute_test_metrics(self, trainer, args):
+    def compute_test_metrics(self, model, tokenizer, args):
         
-        print(f"Testing for the entire dataset. Number of generations per prompt: {args.num_return_seq}")
+        print(f"Testing for the entire dataset. Number of generations  per prompt: {args.num_return_seq}")
         if (self.path_to_test_dataset is None):
             test_dataset = self.dataset['test']
         else:
@@ -138,9 +138,9 @@ class CustomDataset:
             df = pd.read_csv(self.path_to_test_dataset)
             df = df[df[self.text_field].notna()]
             test_dataset = Dataset.from_pandas(df)
-        if(trainer.args.dry_test_run):
+        if(args.dry_test_run):
             print("Test run...")
-            test_dataset = test_dataset.select(range(trainer.args.dry_test_run_samples))
+            test_dataset = test_dataset.select(range(5))
             #num_return_seq = 2
             
 
@@ -165,13 +165,13 @@ class CustomDataset:
         
         # Tokenize data
         def test_preprocess_function(examples):
-            model_inputs = trainer.tokenizer(examples[self.text_field], padding=False)
+            model_inputs = tokenizer(examples[self.text_field], padding=False)
 
             # 2. reserve the original article and summary for saving
             #model_inputs[self.label_field] = examples[self.label_field]
             return model_inputs
 
-        with trainer.args.main_process_first(desc="tokenizing test dataset"):
+        with torch.no_grad():
             test_dataset = test_dataset.map(
                 test_preprocess_function,
                 batched=True, num_proc=None, desc="tokenizing dataset",
@@ -192,14 +192,10 @@ class CustomDataset:
             batch_size: int = 4,
             return_prompt: bool = True,
             pad_to_multiple_of: int = None,
-            **generation_kwargs,
         ):
             outputs = []
 
             tokenizer.padding_side = "left"
-
-            # handle distributed case and distribute query_tensors among gpus
-            query_tensors = query_tensors[device.index::trainer.args.world_size]
 
             # in case we have fewer examples than bs
             batch_size = min(len(query_tensors), batch_size)
@@ -239,36 +235,30 @@ class CustomDataset:
                     ind+=args.num_return_seq
             return outputs
 
-        if hasattr(trainer.model, "generate"):
-            model = trainer.model
+        if hasattr(model, "generate"):
+            model = model
         # The following is for GradSampleModule wrapping
-        elif hasattr(trainer.model._module, "generate"):
-            model = trainer.model._module
+        elif hasattr(model._module, "generate"):
+            model = model._module
         # The following is for GradSampleModule and DPDDP wrapping
-        elif hasattr(trainer.model._module.module, "generate"):
-            model = trainer.model._module.module
+        elif hasattr(model._module.module, "generate"):
+            model = model._module.module
         else:
             raise ValueError("Cannot find generate function in the model.")
 
         model.eval()
-        generation_kwargs = {"max_new_tokens": 100, "pad_token_id": trainer.tokenizer.pad_token_id,
-                             "eos_token_id": trainer.tokenizer.eos_token_id,}
 
         response_tensors = generate_batched(
-            model, trainer.tokenizer, trainer.args.device,
+            model, tokenizer, args.device,
             test_dataset["input_ids"],
-            batch_size=trainer.args.eval_batch_size, return_prompt=False,
-            **generation_kwargs
+            batch_size=args.eval_batch_size, return_prompt=False,
         )
-        responses = [trainer.tokenizer.decode(r.squeeze(), skip_special_tokens=True)
-                                    for r in response_tensors]
-        input_data = [trainer.tokenizer.decode(r.squeeze(), skip_special_tokens=True)
+        responses = [tokenizer.decode(r.squeeze(), skip_special_tokens=True)
+                     for r in response_tensors]
+        input_data = [tokenizer.decode(r.squeeze(), skip_special_tokens=True)
                       for r in test_dataset["input_ids"] for rep in range(args.num_return_seq)] #TODO: Return num_sequences in place of 3 in the range
         output_dataframe['input_prompt'], output_dataframe['output_text'] = input_data, responses
-        #df = pd.DataFrame({'Input Prompt': input_data, 'Output Text': responses})
-        #print(len(input_data))
-        #print(len(responses))
-        #print(output_dataframe)
+
         df = pd.DataFrame(output_dataframe)
         return df
     
@@ -289,8 +279,6 @@ class GenericCustomDataset(CustomDataset):
             self.dataset = load_from_disk(self.path_to_dataset)
         elif load_type == "from_hf":
             self.dataset = load_dataset(dataset_name)
-        elif load_type == "from_hf_path":
-            self.dataset = load_dataset(self.path_to_dataset)
         else:
             raise ValueError(f"Unknown load_type: {load_type}")
 
@@ -515,7 +503,25 @@ ALL_DATASET_CONFIGS = {
         "label_field": "content",
         "prompt_begin": "",
         "prompt_end": "",
-    }
+    },
+    "wiki-merged-split-150": {
+        "name": "wiki-merged-split-150",
+        "load_type": "from_disk",
+        "control_field": "title",
+        "text_field": "title",
+        "label_field": "content",
+        "prompt_begin": "",
+        "prompt_end": "",
+    },
+    "wiki-merged-split-200": {
+        "name": "wiki-merged-split-200",
+        "load_type": "from_disk",
+        "control_field": "title",
+        "text_field": "title",
+        "label_field": "content",
+        "prompt_begin": "",
+        "prompt_end": "",
+    },
 }
 
 ALL_DATASETS = {

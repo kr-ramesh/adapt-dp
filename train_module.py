@@ -118,7 +118,7 @@ def train(
     config.update({f"data_{k}": v for k, v in to_dict(data_args).items()})
 
     run_name = f"{model_args.model_name}_dataset_{data_args.dataset_name}_seq_len_{model_args.sequence_len}_lr_{train_args.lr}_batch_size_{train_args.batch_size}_gas_{train_args.gradient_accumulation_steps}_noise_multiplier_{opacus_config.noise_multiplier}_lora_{train_args.lora_r}_alpha_{train_args.lora_alpha}"
-    #wandb.init(project=train_args.project_name, name=run_name, config=config)
+    wandb.init(project=train_args.project_name, name=run_name, config=config)
 
     model.train()
     privacy_engine = PrivacyEngine()
@@ -222,7 +222,7 @@ def train(
         }
 
         if is_main:
-            #wandb.log(metrics)
+            wandb.log(metrics)
             print(f"Epoch {epoch+1} Train loss: {sum(losses) / len(losses):.4f}")
         
         
@@ -238,7 +238,7 @@ def train(
                     val_losses.append(loss.item())
             val_loss = sum(val_losses)/len(val_losses)
             print(f"Epoch {epoch+1} Val loss: {val_loss:.4f}")
-            #wandb.log({"epoch": epoch+1, "val_loss": val_loss})
+            wandb.log({"epoch": epoch+1, "val_loss": val_loss})
             model.train()
 
         # Save the checkpoint every 5 epochs
