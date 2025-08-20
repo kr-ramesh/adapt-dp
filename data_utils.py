@@ -3,10 +3,11 @@ import evaluate
 import torch
 import numpy as np
 import pandas as pd
-import random
-import os, re, ast, json
+import os, re
 from datasets import Dataset, DatasetDict, load_dataset, load_from_disk
 #TODO: Format the control code part of this
+from collections import Counter
+# Load your CSV
 
 # Modified from https://huggingface.co/docs/peft/task_guides/clm-prompt-tuning
 def main_preprocess_function(examples, tokenizer, text_field, prompt_begin, prompt_end, label_field, sequence_len, single_token=True):
@@ -133,6 +134,10 @@ class CustomDataset:
         print(f"Testing for the entire dataset. Number of generations  per prompt: {args.num_return_seq}")
         if (self.path_to_test_dataset is None):
             test_dataset = self.dataset['test']
+            df = test_dataset.to_pandas()
+            first_unique = df.drop_duplicates(subset=self.text_field, keep='first')
+            test_dataset = Dataset.from_pandas(first_unique)
+            print(test_dataset)
         else:
             print("Loading custom test dataset...")
             df = pd.read_csv(self.path_to_test_dataset)
@@ -224,15 +229,12 @@ class CustomDataset:
                         generations = model.generate(**padded_inputs, do_sample=False, min_new_tokens = args.min_new_tokens, max_new_tokens = args.max_new_tokens, num_return_sequences=args.num_return_seq, num_beams = 5, eos_token_id=tokenizer.eos_token_id, bad_words_ids = [[1, 4768, 5275]], repetition_penalty = args.repetition_penalty)
                     else:
                         generations = model.generate(**padded_inputs, do_sample=True, min_new_tokens = args.min_new_tokens, max_new_tokens = args.max_new_tokens, top_k = args.top_k, top_p = args.top_p, temperature = args.temperature, num_return_sequences=args.num_return_seq, eos_token_id=tokenizer.eos_token_id, bad_words_ids = [[1, 4768, 5275]], repetition_penalty = args.repetition_penalty)
-                ind = 0
-                for mask in padded_inputs["attention_mask"]:
-                    for ind_item in range(ind, ind+args.num_return_seq):
+                for mask, ind in zip(padded_inputs["attention_mask"], range(0, len(generations), args.num_return_seq)):
+                    for ind_item in range(ind, ind + args.num_return_seq):
                         output = generations[ind_item][(1 - mask).sum() :]  # remove padding
-
                         if not return_prompt:
                             output = output[(mask).sum() :]  # remove prompt
                         outputs.append(output)
-                    ind+=args.num_return_seq
             return outputs
 
         if hasattr(model, "generate"):
@@ -257,8 +259,9 @@ class CustomDataset:
                      for r in response_tensors]
         input_data = [tokenizer.decode(r.squeeze(), skip_special_tokens=True)
                       for r in test_dataset["input_ids"] for rep in range(args.num_return_seq)] #TODO: Return num_sequences in place of 3 in the range
+        #print(responses)
+        #print(f"Generated {len(responses)} responses for {len(input_data)} inputs.")
         output_dataframe['input_prompt'], output_dataframe['output_text'] = input_data, responses
-
         df = pd.DataFrame(output_dataframe)
         return df
     
@@ -281,6 +284,9 @@ class GenericCustomDataset(CustomDataset):
             self.dataset = load_dataset(dataset_name)
         else:
             raise ValueError(f"Unknown load_type: {load_type}")
+        
+        if isinstance(self.dataset, Dataset):
+            self.dataset = DatasetDict({"train": self.dataset})
 
         # === Optional: test dataset loading ===
         test_path = getattr(args, "path_to_test_dataset", None)
@@ -292,6 +298,20 @@ class GenericCustomDataset(CustomDataset):
                     self.dataset['test'] = self.create_test_dataset(test_path)
                 else:
                     print(f"Could not load or create test set: {e}")
+        
+        if 'test' in self.dataset and len(self.dataset['test']) > 500:
+            print(f"Dataset {self.name} has more than 500 elements in test set, sampling 200 for evaluation.")
+            self.dataset['test'] = self.dataset['test'].shuffle(seed=42).select(range(200))
+
+        if 'test' not in self.dataset:
+            if len(self.dataset['train']) > 500:
+                print(f"Dataset {self.name} has more than 500 elements, sampling 200 for test set.")
+                self.dataset['test'] = self.dataset['train'].shuffle(seed=42).select(range(200))
+            else:
+                print(f"Dataset {self.name} has less than 500 elements, using the entire train set for test.")
+                self.dataset['test'] = self.dataset['train']
+        
+
 
         # === Field/Prompt configs ===
         self.control_field = config.get("control_field", None)
@@ -323,9 +343,6 @@ class GenericCustomDataset(CustomDataset):
         
         # === Save other args ===
         self.path_to_test_dataset = test_path
-        # Convert to datasetdict if not already
-        if not isinstance(self.dataset, DatasetDict):
-            self.dataset = DatasetDict({"train": self.dataset})
         
         super().__init__(tokenizer, args.sequence_len)
 
@@ -467,8 +484,8 @@ ALL_DATASET_CONFIGS = {
         "prompt_begin": "",
         "prompt_end": "",
     },
-    "common-pile-news": {
-        "name": "common-pile-news",
+    "common-pile-news-filtered": {
+        "name": "common-pile-news-filtered",
         "load_type": "from_disk",
         "control_field": "headline",
         "text_field": "headline",

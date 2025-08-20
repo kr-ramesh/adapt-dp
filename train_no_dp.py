@@ -9,7 +9,6 @@ from opacus import PrivacyEngine
 from opacus.utils.adaptive_clipping.adaptive_clipping_utils import PrivacyEngineAdaptiveClipping
 from opacus.validators import ModuleValidator
 from tqdm import tqdm
-from pld_accounting import compute_noise_multiplier_with_pld
 import gc
 # Integrate weights and biases 
 import wandb
@@ -118,87 +117,10 @@ def train(
     config.update({f"opacus_{k}": v for k, v in to_dict(opacus_config).items()})
     config.update({f"data_{k}": v for k, v in to_dict(data_args).items()})
 
-    if (opacus_config.target_epsilon is not None):
-        run_name = f"{model_args.model_name}_dataset_{data_args.dataset_name}_seq_len_{model_args.sequence_len}_lr_{train_args.lr}_batch_size_{train_args.batch_size}_gas_{train_args.gradient_accumulation_steps}_target_epsilon_{opacus_config.target_epsilon}_lora_{train_args.lora_r}_alpha_{train_args.lora_alpha}_max_grad_norm_{opacus_config.max_grad_norm}"
-        print(f"Using run name with target epsilon: {run_name}")
-        wandb.init(project=train_args.project_name, name=run_name, config=config)
-    else:
-        run_name = f"{model_args.model_name}_dataset_{data_args.dataset_name}_seq_len_{model_args.sequence_len}_lr_{train_args.lr}_batch_size_{train_args.batch_size}_gas_{train_args.gradient_accumulation_steps}_noise_multiplier_{opacus_config.noise_multiplier}_lora_{train_args.lora_r}_alpha_{train_args.lora_alpha}_max_grad_norm_{opacus_config.max_grad_norm}"
-        print(f"Using run name with noise multiplier: {run_name}")
-        wandb.init(project=train_args.project_name, name=run_name, config=config)
+    run_name = f"{model_args.model_name}_dataset_{data_args.dataset_name}_seq_len_{model_args.sequence_len}_lr_{train_args.lr}_batch_size_{train_args.batch_size}_gas_{train_args.gradient_accumulation_steps}_noise_multiplier_inf_lora_{train_args.lora_r}_alpha_{train_args.lora_alpha}"
+    wandb.init(project=train_args.project_name, name=run_name, config=config)
 
     model.train()
-    opacus_config.target_delta = 1/(len(train_set)**1.1)
-    privacy_engine = PrivacyEngine()
-    if opacus_config.pld is False:
-        if opacus_config.target_epsilon is not None:
-            model, optimizer, train_loader = privacy_engine.make_private_with_epsilon(
-                module=model,
-                optimizer=optimizer,
-                data_loader=train_loader,
-                epochs=train_args.epochs,
-                target_epsilon=opacus_config.target_epsilon,
-                target_delta=opacus_config.target_delta,
-                max_grad_norm=opacus_config.max_grad_norm,
-                clipping=opacus_config.clipping
-            )
-            if is_main:
-                print(f"OPACUS: using target_epsilon={opacus_config.target_epsilon} (noise_multiplier found automatically).")
-        elif opacus_config.noise_multiplier is not None:
-            model, optimizer, train_loader = privacy_engine.make_private(
-                module=model,
-                optimizer=optimizer,
-                data_loader=train_loader,
-                noise_multiplier=opacus_config.noise_multiplier,
-                max_grad_norm=opacus_config.max_grad_norm,
-                target_delta=opacus_config.target_delta,
-                clipping=opacus_config.clipping,
-                clipbound_learning_rate=opacus_config.clipbound_learning_rate,
-                target_unclipped_quantile=opacus_config.target_unclipped_quantile,
-                min_clipbound=opacus_config.min_clipbound,
-                max_clipbound=opacus_config.max_clipbound,
-                unclipped_num_std=opacus_config.unclipped_num_std,
-            )
-            if is_main:
-                print(f"OPACUS: using noise_multiplier={opacus_config.noise_multiplier} (fixed; epsilon tracked).")
-    else:
-        if opacus_config.target_epsilon is not None:
-            opacus_config.noise_multiplier = compute_noise_multiplier_with_pld(num_examples=train_args.data_size,
-                batch_size=train_args.batch_size,
-                epochs=train_args.epochs,
-                delta=opacus_config.target_delta,
-                target_epsilon=opacus_config.target_epsilon,
-            )
-        print(f"Using PLD accountant with noise_multiplier={opacus_config.noise_multiplier} for target_epsilon={opacus_config.target_epsilon} and target_delta={opacus_config.target_delta}")
-        model, optimizer, train_loader = privacy_engine.make_private(
-            module=model,
-            optimizer=optimizer,
-            data_loader=train_loader,
-            noise_multiplier=opacus_config.noise_multiplier,
-            max_grad_norm=opacus_config.max_grad_norm,
-            target_delta=opacus_config.target_delta,
-            clipping=opacus_config.clipping,
-            clipbound_learning_rate=opacus_config.clipbound_learning_rate,
-            target_unclipped_quantile=opacus_config.target_unclipped_quantile,
-            min_clipbound=opacus_config.min_clipbound,
-            max_clipbound=opacus_config.max_clipbound,
-            unclipped_num_std=opacus_config.unclipped_num_std,
-        )
-
-
-    optimizer.attach_step_hook(
-            privacy_engine.accountant.get_optimizer_hook_fn(sample_rate=1/len(train_loader)* train_args.gradient_accumulation_steps)
-        )
-    
-    print(train_args)
-    print(f"Learning rate: {train_args.lr}, Noise multiplier: {opacus_config.noise_multiplier}, Clipping norm: {opacus_config.max_grad_norm}")
-
-    # -- OPACUS Privacy Setup (see previous answer for epsilon/noise decision & clipping) --
-    # Validate the model
-    if not ModuleValidator.validate(model, strict=True):
-        print("Model validated.")
-    else:
-        print("Model validation failed. Please check your model configuration.")
     
     if is_main:
         print("Starting training ...")
@@ -206,7 +128,7 @@ def train(
     model.train()
 
     # Printing privacy parameters
-    print(f"Privacy parameters: noise_multiplier={opacus_config.noise_multiplier}, target_delta={opacus_config.target_delta}, clipping={opacus_config.clipping}")
+    #print(f"Privacy parameters: noise_multiplier={opacus_config.noise_multiplier}, target_delta={opacus_config.target_delta}, clipping={opacus_config.clipping}")
     for epoch in range(train_args.epochs):
         if world_size > 1:
             train_loader.sampler.set_epoch(epoch)
@@ -214,7 +136,7 @@ def train(
         #losses = 0.0
         losses = []
         optimizer.zero_grad()
-        with BatchMemoryManager(data_loader=train_loader, max_physical_batch_size=2, optimizer=optimizer) as new_data_loader:
+        with BatchMemoryManager(data_loader=train_loader, max_physical_batch_size=4, optimizer=optimizer) as new_data_loader:
             for step, batch in enumerate(tqdm(new_data_loader, desc=f"Epoch {epoch+1}/{train_args.epochs}", disable=not is_main)):
                 for k in batch:
                     batch[k] = batch[k].to(device)
@@ -271,7 +193,6 @@ def train(
             print(f"Epoch {epoch+1} Val loss: {val_loss:.4f}")
             wandb.log({"epoch": epoch+1, "val_loss": val_loss})
             model.train()
-        torch.cuda.empty_cache()
 
         # Save the checkpoint every 5 epochs
         if(epoch + 1) % 5 == 0 and is_main:

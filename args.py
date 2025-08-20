@@ -45,8 +45,10 @@ class PrivacyArguments:
     max_grad_norm: float = field(default=0.5)
     target_delta: float = field(default=1e-5)
     clipping: str = field(default="per_layer")  # Options: 'flat', 'per_layer'
-    noise_multiplier: float = field(default=0.1)
+    noise_multiplier: float = field(default=None)
     clipbound_learning_rate: float = field(default=0.2)
     target_unclipped_quantile: float = field(default=0.5)
     min_clipbound: float = field(default=0.1)  # Minimum clip bound
     max_clipbound: float = field(default=1.0)  # Maximum clip bound
+    unclipped_num_std: float = field(default=0.1)
+    pld: bool = field(default=False)  # Use PLD accountant
